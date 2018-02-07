@@ -1,0 +1,9 @@
+.idea
+AsyncSpider/__pycache__
+
+AsyncSpider.egg-info
+build
+dist
+
+setup.cmd
+test.py
