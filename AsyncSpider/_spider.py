@@ -110,7 +110,9 @@ class Spider(AioThreadActor):
                         elif isinstance(obj, Request):
                             resp = (await wait_for_responses([obj], action.action_id, work_cond))[0]
                         elif isinstance(obj, list):
-                            resp = await wait_for_responses([obj], action.action_id, work_cond)
+                            resp = await wait_for_responses(obj, action.action_id, work_cond)
+                        else:
+                            resp = None
 
         def add_work():
             nonlocal working_num
