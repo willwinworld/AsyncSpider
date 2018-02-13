@@ -1,22 +1,42 @@
-from ._base import AioThreadActor
-from ._utils import Storage, asleep, ThreadSafeQueue
+from ._base import AbstractFetcher
+from ._utils import Storage
 import asyncio
 import aiohttp
 
-__all__ = ['Request', 'Response', 'Fetcher']
-
 
 class Request(Storage):
+    __slots__ = ('method', 'url', 'params', 'data', 'encoding', 'headers', 'proxy', 'proxy_headers', 'allow_redirects',
+                 'max_redirects',)
+
     def __init__(self, method, url, **kwargs):
-        super().__init__(method=method, url=url, **kwargs)
+        super().__init__()
+        self.update(method=method, url=url, **kwargs)
 
 
 class Response(Storage):
-    def __init__(self, status, content, **kwargs):
-        super().__init__(status=status, content=content, **kwargs)
+    __slots__ = ('status', 'content', 'encoding',
+                 'headers', 'cookies',
+                 'host', 'history')
 
-    def text(self, encoding='utf8') -> str:
-        return self.content.decode(encoding)
+    def __init__(self, status, content, encoding, headers, cookies, host, history):
+        super().__init__()
+        self.update(status=status, content=content, encoding=encoding,
+                    headers=headers, cookies=cookies,
+                    host=host, history=history)
+
+    @property
+    def text(self):
+        return self.content.decode(self.encoding)
+
+    @classmethod
+    async def from_ClientResponse(cls, resp: aiohttp.ClientResponse):
+        return cls(status=resp.status,
+                   content=await resp.read(),
+                   encoding=resp._get_encoding(),
+                   headers=resp.headers,
+                   cookies=resp.cookies,
+                   host=resp.host,
+                   history=resp.history)
 
 
 class TokenBucket:
@@ -24,93 +44,87 @@ class TokenBucket:
         assert 1 <= qps <= size
         self.qps = qps
         self.size = size
-        self.token_num = 0
+        self._token_num = 0
         self._loop = loop or asyncio.get_event_loop()
         self._task = None
         self._condition = asyncio.Condition(loop=self._loop)
 
     def start(self):
-        self.token_num = self.size
+        self._token_num = self.size
         self._task = self._loop.create_task(self._run())
-
-    async def _run(self):
-        while True:
-            await asleep(1)
-            self.token_num += self.qps
-            if self.token_num > self.size:
-                self.token_num = self.size
-            async with self._condition:
-                self._condition.notify_all()
 
     def stop(self):
         self._task.cancel()
         self._task = None
+        self._token_num = 0
+
+    async def _run(self):
+        while True:
+            await asyncio.sleep(1)
+            self._token_num += self.qps
+            if self._token_num > self.size:
+                self._token_num = self.size
+            async with self._condition:
+                self._condition.notify_all()
 
     async def acquire(self):
         while True:
-            if self.token_num >= 1:
-                self.token_num -= 1
+            if self._token_num >= 1:
+                self._token_num -= 1
                 break
             else:
                 async with self._condition:
                     await self._condition.wait()
 
 
-class Fetcher(AioThreadActor):
-    qps = 100
-    max_qps = 200
-
-    def __init__(self, requests_queue=None, responses_queue=None):
+class Fetcher(AbstractFetcher):
+    def __init__(self, settings: dict):
         super().__init__()
-        self.requests_queue = requests_queue or ThreadSafeQueue()
-        self.responses_queue = responses_queue or ThreadSafeQueue()
-        self.token_bucket = None
-        self.session = None
+        self.session: aiohttp.ClientSession = None
+        self._token_bucket: TokenBucket = None
+
+        self.qps = settings.get('qps', 100)
+        self.max_qps = settings.get('max_qps', 200)
 
     def open(self):
-        self.token_bucket = TokenBucket(self.qps, self.max_qps, loop=self._loop)
         self.session = aiohttp.ClientSession(loop=self._loop)
+        self._token_bucket = TokenBucket(qps=self.qps, size=self.max_qps, loop=self._loop)
+        self._token_bucket.start()
 
     def close(self):
-        self.token_bucket = None
         self.session.close()
         self.session = None
+        self._token_bucket.stop()
+        self._token_bucket = None
 
-    async def _main(self):
-        self.token_bucket.start()
-        self._loop.create_task(self._req_adder())
-        await self.wait_until_stopped()
-        self.cancel_all_tasks()
+    async def fetch(self, *requests) -> [Response, ]:
+        try:
+            requests[0]
+        except IndexError:
+            raise RuntimeError('fetch(*requests) got no requests')
+        responses = await self._handle_requests(requests)
+        try:
+            responses[1]
+        except IndexError:
+            return responses[0]
+        else:
+            return responses
 
-    async def _req_adder(self):
-        while True:
-            if self.requests_queue.empty():
-                await asleep(1)
-            else:
-                aid, requests = self.requests_queue.get_nowait()
-                self._loop.create_task(self._handle_requests(aid, requests))
-                self.requests_queue.task_done()
+    async def _handle_requests(self, requests) -> [Response, ]:
+        requests = [await self.process_request(req) for req in requests]
+        responses = [None] * len(requests)
 
-    async def process_request(self, request) -> Request:
+        async def _request(index, request):
+            responses[index] = await self._request(request)
+
+        await asyncio.wait([_request(i, req) for i, req in enumerate(requests)])
+        return responses
+
+    async def process_request(self, request: Request) -> Request:
         return request
 
-    async def request(self, **kwargs):
-        await self.token_bucket.acquire()
+    async def _request(self, request: Request) -> Response:
+        await self._token_bucket.acquire()
+        kwargs = request.as_dict()
         async with self.session.request(**kwargs) as resp:
-            return await self.process_response(resp)
-
-    async def process_response(self, response) -> Response:
-        # todo : extract more info
-        return Response(response.status,
-                        await response.read())
-
-    async def _handle_request(self, request, index, responses):
-        req = await self.process_request(request)
-        resp = await self.request(**req)
-        responses[index] = resp
-
-    async def _handle_requests(self, aid, requests):
-        responses = [None] * len(requests)
-        tasks = [self._loop.create_task(self._handle_request(req, i, responses)) for i, req in enumerate(requests)]
-        await asyncio.wait(tasks)
-        self.responses_queue.put_nowait((aid, responses))
+            return await Response.from_ClientResponse(resp)

@@ -1,7 +1,7 @@
-from AsyncSpider._saver import Saver
-from AsyncSpider._item import Item, Field
-from AsyncSpider._utils import asleep
+from AsyncSpider import Saver, Item, Field
+import asyncio
 import time
+from random import random
 
 
 class TestItem(Item):
@@ -11,16 +11,17 @@ class TestItem(Item):
 
 class PrintSaver(Saver):
     async def save(self, item):
-        await asleep(1)
+        await asyncio.sleep(random())
         print(item)
 
 
 if __name__ == '__main__':
-    s = PrintSaver()
+    s = PrintSaver({})
     s.start()
-    q = s.item_queue
-    for x in range(1, 10 + 1):
-        i = TestItem(title=x, content=x)
-        q.put(i)
+    for x in 'abcdefg':
+        for j in '123':
+            i = TestItem(title=x, content=j)
+            s.run_coro(s.save(i))
         time.sleep(0.2)
-    s.stop(join=True)
+    s.stop()
+    s.join()

@@ -1,27 +1,33 @@
-from threading import Thread, Lock
+from threading import Thread
 import asyncio
 
-__all__ = ['AioThreadActor']
+
+def run_in_loop(main_loop, coro, sub_loop) -> asyncio.Future:
+    future = asyncio.run_coroutine_threadsafe(coro, loop=sub_loop)
+    return asyncio.futures.wrap_future(future, loop=main_loop)
 
 
-class ThreadActor:
+def cancel_all_tasks(loop):
+    tasks = asyncio.Task.all_tasks(loop=loop)
+    if tasks:
+        for task in tasks:
+            task.cancel()
+        loop.run_until_complete(asyncio.wait(tasks))
+
+
+class AioThreadActor:
     def __init__(self):
-        self._thread = Thread(name=self.__class__.__name__,
-                              target=lambda: (self.open(), self._run(), self.close()),
-                              daemon=True)
-        self._thread_lock = Lock()
-
-    def start(self):
-        self._thread.start()
-
-    def stop(self, join: bool = True):
-        raise NotImplementedError
-
-    def join(self):
-        self._thread.join()
+        self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self._thread = Thread(target=self._run,
+                              daemon=True,
+                              name=self.__class__.__name__)
 
     def _run(self):
-        pass
+        self.open()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+        cancel_all_tasks(loop=self._loop)
+        self.close()
 
     def open(self):
         pass
@@ -29,32 +35,25 @@ class ThreadActor:
     def close(self):
         pass
 
+    def start(self):
+        self._thread.start()
 
-class AioThreadActor(ThreadActor):
-    def __init__(self):
-        super().__init__()
-        self._loop = asyncio.new_event_loop()
-        self._stop_event = asyncio.Event(loop=self._loop)
+    def stop(self):
+        self._loop.call_soon_threadsafe(self._loop.stop)
 
-    def _run(self):
-        self._loop.run_until_complete(self._loop.create_task(self._main()))
+    def join(self):
+        self._thread.join()
 
-    def stop(self, join: bool = True):
-        with self._thread_lock:
-            self._stop_event.set()
-        if join:
-            self.join()
+    def run_coro(self, coro, *, loop=None):
+        loop = loop or asyncio.get_event_loop()
+        return run_in_loop(loop, coro, self._loop)
 
-    def cancel_all_tasks(self):
-        cur_task = asyncio.Task.current_task(loop=self._loop)
-        tasks = asyncio.Task.all_tasks(loop=self._loop)
-        tasks.remove(cur_task)
-        for task in tasks:
-            task.cancel()
 
-    async def wait_until_stopped(self):
-        await self._stop_event.wait()
+class AbstractFetcher(AioThreadActor):
+    async def fetch(self, *requests):
+        raise NotImplementedError
 
-    async def _main(self):
-        await self.wait_until_stopped()
-        self.cancel_all_tasks()
+
+class AbstractSaver(AioThreadActor):
+    async def save(self, item):
+        raise NotImplementedError

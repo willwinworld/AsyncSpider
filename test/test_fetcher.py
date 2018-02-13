@@ -1,6 +1,7 @@
 from AsyncSpider import Fetcher, Request
 import requests
 import time
+import asyncio
 
 
 def count_time(func, *args, **kwargs):
@@ -18,40 +19,39 @@ def requests_test(url, num):
 
 
 def fetcher_test(url, num):
-    f = Fetcher()
+    f = Fetcher(dict(qps=20, max_qps=20))
+    loop = asyncio.get_event_loop()
     f.start()
-    for i in range(num):
-        f.requests_queue.put((i + 1, [Request('get', url)]))
 
-    for _ in range(num):
-        aid, responses = f.responses_queue.get()
-        resp = responses[0]
-        print(f"index: {aid}\tstatus: {resp.status}\ttext: {resp.content.decode('utf8')[:50].strip()}")
+    async def func(i, future):
+        resp = await future
+        print(f"index: {i}\tstatus: {resp.status}\ttext: {resp.text[:50].strip()}")
 
-    f.stop(join=True)
+    loop.run_until_complete(asyncio.wait([func(i, f.run_coro(f.fetch(Request('get', url)))) for i in range(num)]))
+
+    f.stop()
+    f.join()
 
 
 def fetcher_test2(url, num):
-    f = Fetcher()
+    f = Fetcher(dict(qps=50, max_qps=50))
+    loop = asyncio.get_event_loop()
     f.start()
-    f.requests_queue.put((233, [Request('get', url) for _ in range(num)]))
-
-    aid, responses = f.responses_queue.get()
+    responses = loop.run_until_complete(f.run_coro(
+        f.fetch(*[Request('get', url) for _ in range(num)])))
     for i, resp in enumerate(responses):
-        print(f"index: {i+1}\tstatus: {resp.status}\ttext: {resp.content.decode('utf8')[:50].strip()}")
-
-    f.stop(join=True)
+        print(f"index: {i}\tstatus: {resp.status}\ttext: {resp.text[:50].strip()}")
+    f.stop()
+    f.join()
 
 
 if __name__ == '__main__':
     target = "https://www.hao123.com/"
     n = 100
-
+    print('test start')
     # for func in (requests_test, fetcher_test, fetcher_test2):
     # for func in (fetcher_test, fetcher_test2):
-    print('test start')
-
-    for func in (fetcher_test2,):
+    for func in (fetcher_test,):
         t, r = count_time(func, target, n)
         print(f'{func.__name__}: {t}s')
 

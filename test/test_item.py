@@ -1,4 +1,4 @@
-from AsyncSpider._item import Item, Field
+from AsyncSpider import Item, Field
 
 
 class TestItem(Item):
@@ -15,7 +15,6 @@ if __name__ == '__main__':
     t['content'] = ['deep dark fantasy']
     print(f't: {t}')
     t2 = t.copy()
-    print(type(t2))
     t2.title = 'Van'
     print(f't: {t}')
     print(f't2: {t2}')

@@ -1,22 +1,21 @@
-from ._utils import asleep, ThreadSafeQueue, AsyncQueue
 from ._base import AioThreadActor
+from ._fetcher import Fetcher
+from ._saver import Saver
 from ._item import Item
-from ._fetcher import Request
-from collections.abc import AsyncGenerator
+from ._settings import default_settings
 from functools import wraps
+from collections import AsyncGenerator
+from asyncio import Queue as AsyncQueue
 import asyncio
-
-__all__ = ['actionmethod', 'Spider']
 
 
 class Action(AsyncGenerator):
-    def __init__(self, gen: AsyncGenerator, action_id):
-        super().__init__()
+    def __init__(self, gen: AsyncGenerator, name):
         self._gen = gen
-        self.action_id = action_id
+        self.name = name
 
     async def __anext__(self):
-        return await self._gen.asend(None)
+        return await self.asend(None)
 
     async def asend(self, value):
         return await self._gen.asend(value)
@@ -24,129 +23,121 @@ class Action(AsyncGenerator):
     async def athrow(self, typ, val=None, tb=None):
         return await self._gen.athrow(typ, val, tb)
 
-    async def close(self):
-        await self._gen.aclose()
+    async def aclose(self):
+        return await self._gen.aclose()
+
+
+def isactionmethod(func):
+    return getattr(func, '__isactionmethod__', False)
 
 
 def actionmethod(func):
+    func.__isactionmethod__ = True
+
     @wraps(func)
-    def wrapper(spider, *args, **kwargs):
-        gen = func(spider, *args, **kwargs)
-        return Action(gen, hash(gen))
+    def wrapper(self, *args, **kwargs):
+        return Action(func(self, *args, **kwargs), func.__name__)
 
     return wrapper
 
 
-class Spider(AioThreadActor):
-    max_concurrent_action_num = 100
+class SpiderMeta(type):
+    def __new__(mcs, name, bases, namespace: dict):
+        spider_class = type.__new__(mcs, name, bases, namespace)
+        actions: dict = getattr(spider_class, 'actions')
+        actions.update({k: v for k, v in namespace.items() if isactionmethod(v)})
+        return spider_class
 
-    def __init__(self, requests_queue=None, responses_queue=None, item_queue=None):
+
+class Spider(AioThreadActor, metaclass=SpiderMeta):
+    actions = {}
+
+    def __init__(self, settings: dict = None):
         super().__init__()
+        settings = settings or default_settings
 
-        self.requests_queue = requests_queue or ThreadSafeQueue()
-        self.responses_queue = responses_queue or ThreadSafeQueue()
-        self.item_queue = item_queue or ThreadSafeQueue()
+        spider_settings = settings.get('Spider', {})
+        self.max_current_actions = spider_settings.get('max_current_actions') or 10
+        assert self.max_current_actions >= 1 and isinstance(self.max_current_actions, int)
+
+        fetcher_settings = settings.get('Fetcher', {})
+        fetcher_class = fetcher_settings.get('class', Fetcher)
+        self.fetcher = fetcher_class(fetcher_settings)
+
+        saver_settings = settings.get('Saver', {})
+        saver_class = saver_settings.get('class', Saver)
+        self.saver = saver_class(saver_settings)
 
         self._action_queue = AsyncQueue()
-
-        self._aid2work_cond = {}
-        self._aid2responses = {}
-
-    def open(self):
         self._action_queue.put_nowait(self.start_action())
 
-    def close(self):
-        self._aid2responses.clear()
-        self._aid2work_cond.clear()
+        self._driving_action_num = 0
+        self._action_finished_event = asyncio.Event(loop=self._loop)
 
-    async def _main(self):
-        self._loop.create_task(self._work_adder())
-        self._loop.create_task(self._responses_putter())
-        await self.wait_until_stopped()
-        self.cancel_all_tasks()
+    def start(self):
+        self.fetcher.start()
+        self.saver.start()
+        super().start()
 
-    async def _work_adder(self):
-        work_semaphore = asyncio.Semaphore(self.max_concurrent_action_num, loop=self._loop)
-        adder_cond = asyncio.Condition(loop=self._loop)
-        working_num = 0
+    def stop(self):
+        self.fetcher.stop()
+        self.saver.stop()
+        super().stop()
 
-        async def wait_for_responses(requests, aid, work_cond):
-            # send requests
-            self.requests_queue.put_nowait((aid, requests))
-            async with work_cond:
-                # wait for responses
-                await work_cond.wait()
-                resp = self._aid2responses[aid]
-                del self._aid2responses[aid]
-                return resp
+    def join(self):
+        super().join()
+        self.fetcher.stop()
+        self.saver.stop()
+        self.fetcher.join()
+        self.saver.join()
 
-        async def work(action):
-            nonlocal working_num
-            async with work_semaphore:
-                # register this work
-                work_cond = asyncio.Condition(loop=self._loop)
-                self._aid2work_cond[action.action_id] = work_cond
+    def open(self):
+        self._loop.create_task(self.driver_adder())
 
-                # drive the action
-                # resp is not Response(s),but a obj to be sent into the action
-                resp = None
-                while True:
-                    try:
-                        obj = await action.asend(resp)
-                    except StopAsyncIteration:
-                        # unregister this work
-                        del self._aid2work_cond[action.action_id]
-                        working_num -= 1
-                        async with adder_cond:
-                            adder_cond.notify()
-                        break
-                    else:
-                        if isinstance(obj, Action):
-                            await self._action_queue.put(obj)
-                            resp = None
-                        elif isinstance(obj, Item):
-                            self.item_queue.put_nowait(obj)
-                            resp = None
-                        elif isinstance(obj, Request):
-                            resp = (await wait_for_responses([obj], action.action_id, work_cond))[0]
-                        elif isinstance(obj, list):
-                            resp = await wait_for_responses(obj, action.action_id, work_cond)
-                        else:
-                            resp = None
+    async def fetch(self, *requests):
+        return await self.fetcher.run_coro(self.fetcher.fetch(*requests), loop=self._loop)
 
-        def add_work():
-            nonlocal working_num
-            act = self._action_queue.get_nowait()
-            self._loop.create_task(work(act))
-            working_num += 1
-            self._action_queue.task_done()
+    async def save(self, item, wait_for_result=False):
+        future = self.saver.run_coro(self.saver.save(item), loop=self._loop)
+        if wait_for_result:
+            return await future
 
-        add_work()
+    async def add_action(self, action: AsyncGenerator):
+        await self._action_queue.put(action)
 
-        while True:
-            async with adder_cond:
-                await adder_cond.wait()
-                # when a work finished
-                if self._action_queue.empty():
-                    if working_num == 0:
-                        # there is no action to drive and no action going
-                        self._stop_event.set()
-                        break
-                else:
-                    while not self._action_queue.empty():
-                        add_work()
-
-    async def _responses_putter(self):
-        while True:
-            if self.responses_queue.empty():
-                await asleep(1)
+    async def drive(self, action: Action):
+        async def handle_obj(obj):
+            if obj is None:
+                pass
+            elif isinstance(obj, Item):
+                await self.save(obj)
+            elif isinstance(obj, Action):
+                await self.add_action(obj)
             else:
-                aid, responses = self.responses_queue.get_nowait()
-                self._aid2responses[aid] = responses
-                self.responses_queue.task_done()
-                work_cond = self._aid2work_cond[aid]
-                async with work_cond:
-                    work_cond.notify()
+                raise TypeError(f'{action.name} yield an unexpected object {obj}.')
+
+        def exit_drive():
+            self._driving_action_num -= 1
+            self._action_finished_event.set()
+
+        try:
+            async for o in action:
+                await handle_obj(o)
+        finally:
+            exit_drive()
+
+    async def driver_adder(self):
+        while True:
+            while not self._action_queue.empty():
+                act = self._action_queue.get_nowait()
+                self._loop.create_task(self.drive(act))
+                self._driving_action_num += 1
+                self._action_queue.task_done()
+            await self._action_finished_event.wait()
+            if self._driving_action_num == 0 and self._action_queue.empty():
+                break
+            self._action_finished_event.clear()
+        self._loop.stop()
 
     @actionmethod
     async def start_action(self):

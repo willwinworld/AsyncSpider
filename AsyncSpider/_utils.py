@@ -1,23 +1,52 @@
-import queue
-import asyncio
-
-__all__ = ['ThreadSafeQueue', 'AsyncQueue', 'asleep', 'Storage']
-
-ThreadSafeQueue = queue.Queue
-AsyncQueue = asyncio.Queue
-
-asleep = asyncio.sleep
+from copy import copy
 
 
-class Storage(dict):
-    def __init__(self, **kwargs):
-        dict.__init__(self, **kwargs)
+class Storage:
+    __slots__ = ()
 
-    def __getattr__(self, key):
-        return self[key]
+    def __init__(self):
+        for f in self.keys():
+            self[f] = None
 
-    def __setattr__(self, key, value):
-        self[key] = value
+    def copy(self, **kwargs):
+        new_instance = copy(self)
+        new_instance.update(**kwargs)
+        return new_instance
 
-    def copy(self):
-        return self.__class__(**self)
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def __iter__(self):
+        return self.values()
+
+    def keys(self):
+        return (f for f in self.__slots__)
+
+    def values(self):
+        return (self[f] for f in self.keys())
+
+    def items(self):
+        return (item for item in zip(self.keys(), self.values()))
+
+    def as_dict(self):
+        return dict(self.items())
+
+    def as_list(self):
+        return list(self.values())
+
+    def __getitem__(self, field):
+        try:
+            return getattr(self, field)
+        except AttributeError:
+            raise KeyError(f'{self} has not field {repr(field)}.')
+
+    def __setitem__(self, field, value):
+        try:
+            setattr(self, field, value)
+        except AttributeError:
+            raise KeyError(f'{self} has not field {repr(field)}.')
+
+    def __str__(self):
+        # dict view
+        return str(self.as_dict())

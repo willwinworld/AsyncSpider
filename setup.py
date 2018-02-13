@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="AsyncSpider",
-    version="0.1.0",
+    version="0.2.0",
     description="Async Spider Framework",
     author="Nugine",
     author_email="Nugine@163.com",
