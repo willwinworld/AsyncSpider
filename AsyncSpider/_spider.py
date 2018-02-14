@@ -105,7 +105,7 @@ class Spider(AioThreadActor, metaclass=SpiderMeta):
     async def add_action(self, action: AsyncGenerator):
         await self._action_queue.put(action)
 
-    async def drive(self, action: Action):
+    async def drive(self, action: Action, semaphore):
         async def handle_obj(obj):
             if obj is None:
                 pass
@@ -120,17 +120,19 @@ class Spider(AioThreadActor, metaclass=SpiderMeta):
             self._driving_action_num -= 1
             self._action_finished_event.set()
 
-        try:
-            async for o in action:
-                await handle_obj(o)
-        finally:
-            exit_drive()
+        async with semaphore:
+            try:
+                async for o in action:
+                    await handle_obj(o)
+            finally:
+                exit_drive()
 
     async def driver_adder(self):
+        semaphore = asyncio.Semaphore(self.max_current_actions, loop=self._loop)
         while True:
             while not self._action_queue.empty():
                 act = self._action_queue.get_nowait()
-                self._loop.create_task(self.drive(act))
+                self._loop.create_task(self.drive(act, semaphore))
                 self._driving_action_num += 1
                 self._action_queue.task_done()
             await self._action_finished_event.wait()

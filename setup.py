@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="AsyncSpider",
-    version="0.2.0",
+    version="0.2.1",
     description="Async Spider Framework",
     author="Nugine",
     author_email="Nugine@163.com",
@@ -15,6 +15,7 @@ setup(
     ],
     install_requires=[
         'aiohttp',
+        'chardet'
     ],
     license='Apache License',
     packages=find_packages(),

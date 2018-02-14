@@ -2,6 +2,7 @@ from ._base import AbstractFetcher
 from ._utils import Storage
 import asyncio
 import aiohttp
+import chardet
 
 
 class Request(Storage):
@@ -14,15 +15,33 @@ class Request(Storage):
 
 
 class Response(Storage):
-    __slots__ = ('status', 'content', 'encoding',
+    __slots__ = ('status', 'content',
                  'headers', 'cookies',
                  'host', 'history')
 
-    def __init__(self, status, content, encoding, headers, cookies, host, history):
+    def __init__(self, status, content, headers, cookies, host, history):
         super().__init__()
-        self.update(status=status, content=content, encoding=encoding,
+        self.update(status=status, content=content,
                     headers=headers, cookies=cookies,
                     host=host, history=history)
+
+    @property
+    def encoding(self):
+        # from aiohttp
+        ctype = self.headers.get(aiohttp.hdrs.CONTENT_TYPE, '').lower()
+        mtype, stype, _, params = aiohttp.helpers.parse_mimetype(ctype)
+
+        encoding = params.get('charset')
+        if not encoding:
+            if mtype == 'application' and stype == 'json':
+                # RFC 7159 states that the default encoding is UTF-8.
+                encoding = 'utf-8'
+            else:
+                encoding = chardet.detect(self.content)['encoding']
+        if not encoding:
+            encoding = 'utf-8'
+
+        return encoding
 
     @property
     def text(self):
@@ -32,7 +51,6 @@ class Response(Storage):
     async def from_ClientResponse(cls, resp: aiohttp.ClientResponse):
         return cls(status=resp.status,
                    content=await resp.read(),
-                   encoding=resp._get_encoding(),
                    headers=resp.headers,
                    cookies=resp.cookies,
                    host=resp.host,
