@@ -1,5 +1,7 @@
 from copy import copy
 
+__all__ = ['Storage']
+
 
 class Storage:
     __slots__ = ()

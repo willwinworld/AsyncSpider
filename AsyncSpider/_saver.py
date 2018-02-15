@@ -2,9 +2,11 @@ from ._base import AbstractSaver
 from ._item import Item
 import asyncio
 
+__all__ = ['Saver']
+
 
 class Saver(AbstractSaver):
-    def __init__(self, settings: dict):
+    def __init__(self, **settings):
         super().__init__()
         self.run_until_complete = settings.get('run_until_complete', True)
 

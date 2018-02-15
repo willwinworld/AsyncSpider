@@ -4,6 +4,8 @@ import asyncio
 import aiohttp
 import chardet
 
+__all__ = ['Request', 'Response', 'TokenBucket', 'Fetcher']
+
 
 class Request(Storage):
     __slots__ = ('method', 'url', 'params', 'data', 'encoding', 'headers', 'proxy', 'proxy_headers', 'allow_redirects',
@@ -96,13 +98,13 @@ class TokenBucket:
 
 
 class Fetcher(AbstractFetcher):
-    def __init__(self, settings: dict):
+    def __init__(self, **settings):
         super().__init__()
         self.session: aiohttp.ClientSession = None
         self._token_bucket: TokenBucket = None
 
         self.qps = settings.get('qps', 100)
-        self.max_qps = settings.get('max_qps', 200)
+        self.max_qps = settings.get('max_qpa', 200)
 
     def open(self):
         self.session = aiohttp.ClientSession(loop=self._loop)
