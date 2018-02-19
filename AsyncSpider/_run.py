@@ -1,15 +1,27 @@
 from ._settings import default_settings
+from ._spider import Spider
+from contextlib import contextmanager
 
 __all__ = ['run']
 
 
-def run(spider_class, fetcher_class, saver_class, settings=None, join=True):
+@contextmanager
+def run(spider_class, fetcher_class, saver_class, settings=None):
     settings = settings or default_settings
 
-    fetcher = fetcher_class(**settings.get('Fetcher', {}))
-    saver = saver_class(**settings.get('Saver', {}))
-    spider = spider_class(fetcher, saver, **settings.get('Spider', {}))
+    fetcher = fetcher_class(settings)
+    saver = saver_class(settings)
+    spider: Spider = spider_class(fetcher, saver, settings)
 
+    spider.start_sub()
     spider.start()
-    if join:
-        spider.join()
+
+    yield spider
+
+    spider.stop()
+    spider.stop_sub()
+
+# for example:
+
+# with run(spd_cls, fc, sc, settings) as spd:
+#     spd.join()

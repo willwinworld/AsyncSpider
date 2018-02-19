@@ -17,43 +17,37 @@ class SpiderMeta(type):
 class Spider(AbstractSpider, metaclass=SpiderMeta):
     actions = {}
 
-    def __init__(self, fetcher, saver, **settings):
+    def __init__(self, fetcher, saver, settings):
         super().__init__()
 
-        self.max_current_actions = settings.get('max_current_actions', 10)
-        assert self.max_current_actions >= 1 and isinstance(self.max_current_actions, int)
+        self.settings = settings
+        self.max_current_actions = settings.spider.get('max_current_actions')
 
         self.fetcher = fetcher
         self.saver = saver
 
-        self._action_queue = AsyncQueue()
+        self._driver_semaphore = asyncio.Semaphore(self.max_current_actions, loop=self._loop)
+        self._driving_action_num = 0
+        self._action_queue = AsyncQueue(loop=self._loop)
         self._action_queue.put_nowait(self.start_action())
 
-        self._driving_action_num = 0
-        self._action_finished_event = asyncio.Event(loop=self._loop)
-
-    def start(self):
+    def start_sub(self):
         self.fetcher.start()
         self.saver.start()
-        super().start()
 
-    def stop(self):
+    def stop_sub(self):
         self.fetcher.stop()
         self.saver.stop()
-        super().stop()
 
-    def join(self):
-        super().join()
-        self.fetcher.stop()
-        self.saver.stop()
+    def join_sub(self):
         self.fetcher.join()
         self.saver.join()
 
     def open(self):
-        self._loop.create_task(self._driver_adder())
+        self._next()
 
-    async def fetch(self, *requests):
-        return await self.fetcher.run_coro(self.fetcher.fetch(*requests), loop=self._loop)
+    async def fetch(self, method, url, **kwargs):
+        return await self.fetcher.run_coro(self.fetcher.fetch(method, url, **kwargs), loop=self._loop)
 
     async def save(self, item, wait_for_result=False):
         future = self.saver.run_coro(self.saver.save(item), loop=self._loop)
@@ -63,41 +57,32 @@ class Spider(AbstractSpider, metaclass=SpiderMeta):
     async def add_action(self, action):
         await self._action_queue.put(action)
 
-    async def _drive(self, action, semaphore):
-        async def handle_obj(obj):
-            if obj is None:
-                pass
-            elif isinstance(obj, Item):
-                await self.save(obj)
-            elif isinstance(obj, Action):
-                await self.add_action(obj)
-            else:
-                raise TypeError(f'{action.name} yield an unexpected object {obj}.')
-
-        def exit_drive():
-            self._driving_action_num -= 1
-            self._action_finished_event.set()
-
-        async with semaphore:
+    async def _drive(self, action):
+        async with self._driver_semaphore:
             try:
-                async for o in action:
-                    await handle_obj(o)
+                async for obj in action:
+                    if obj is None:
+                        pass
+                    elif isinstance(obj, Item):
+                        await self.save(obj)
+                    elif isinstance(obj, Action):
+                        await self.add_action(obj)
+                    else:
+                        raise TypeError('{} yield an unexpected object {}.'.format(action.name, obj))
             finally:
-                exit_drive()
+                self._driving_action_num -= 1
+                self._next()
 
-    async def _driver_adder(self):
-        semaphore = asyncio.Semaphore(self.max_current_actions, loop=self._loop)
-        while True:
+    def _next(self):
+        if self._action_queue.empty():
+            if self._driving_action_num == 0:
+                self._loop.stop()
+        else:
             while not self._action_queue.empty():
                 act = self._action_queue.get_nowait()
-                self._loop.create_task(self._drive(act, semaphore))
+                self._loop.create_task(self._drive(act))
                 self._driving_action_num += 1
                 self._action_queue.task_done()
-            await self._action_finished_event.wait()
-            if self._driving_action_num == 0 and self._action_queue.empty():
-                break
-            self._action_finished_event.clear()
-        self._loop.stop()
 
     @actionmethod
     async def start_action(self):

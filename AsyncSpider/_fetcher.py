@@ -1,5 +1,5 @@
-from ._base import AbstractFetcher
-from ._utils import Storage
+from ._base import AbstractFetcher, Storage
+from ._settings import Settings
 import asyncio
 import aiohttp
 import chardet
@@ -8,8 +8,9 @@ __all__ = ['Request', 'Response', 'TokenBucket', 'Fetcher']
 
 
 class Request(Storage):
-    __slots__ = ('method', 'url', 'params', 'data', 'encoding', 'headers', 'proxy', 'proxy_headers', 'allow_redirects',
-                 'max_redirects',)
+    __slots__ = ('method', 'url', 'params', 'data', 'encoding',
+                 'headers', 'proxy', 'proxy_headers',
+                 'allow_redirects', 'max_redirects',)
 
     def __init__(self, method, url, **kwargs):
         super().__init__()
@@ -17,19 +18,21 @@ class Request(Storage):
 
 
 class Response(Storage):
-    __slots__ = ('status', 'content',
+    __slots__ = ('status', 'content', '_encoding',
                  'headers', 'cookies',
                  'host', 'history')
 
     def __init__(self, status, content, headers, cookies, host, history):
         super().__init__()
-        self.update(status=status, content=content,
+        self.update(status=status, content=content, _encoding=None,
                     headers=headers, cookies=cookies,
                     host=host, history=history)
 
-    @property
-    def encoding(self):
-        # from aiohttp
+    def get_encoding(self):
+        if self._encoding:
+            return self._encoding
+
+        # copied from aiohttp
         ctype = self.headers.get(aiohttp.hdrs.CONTENT_TYPE, '').lower()
         mtype, stype, _, params = aiohttp.helpers.parse_mimetype(ctype)
 
@@ -43,14 +46,15 @@ class Response(Storage):
         if not encoding:
             encoding = 'utf-8'
 
+        self.update(_encoding=encoding)
         return encoding
 
-    @property
-    def text(self):
-        return self.content.decode(self.encoding)
+    def text(self, encoding=None, errors='strict'):
+        encoding = encoding or self.get_encoding()
+        return self.content.decode(encoding, errors=errors)
 
     @classmethod
-    async def from_ClientResponse(cls, resp: aiohttp.ClientResponse):
+    async def fromClientResponse(cls, resp: aiohttp.ClientResponse):
         return cls(status=resp.status,
                    content=await resp.read(),
                    headers=resp.headers,
@@ -60,8 +64,7 @@ class Response(Storage):
 
 
 class TokenBucket:
-    def __init__(self, qps: int, size: int, *, loop=None):
-        assert 1 <= qps <= size
+    def __init__(self, qps, size, *, loop=None):
         self.qps = qps
         self.size = size
         self._token_num = 0
@@ -81,30 +84,27 @@ class TokenBucket:
     async def _run(self):
         while True:
             await asyncio.sleep(1)
-            self._token_num += self.qps
-            if self._token_num > self.size:
-                self._token_num = self.size
+            tn = self._token_num + self.qps
+            self._token_num = self.size if tn > self.size else tn
             async with self._condition:
                 self._condition.notify_all()
 
-    async def acquire(self):
-        while True:
-            if self._token_num >= 1:
-                self._token_num -= 1
-                break
-            else:
-                async with self._condition:
-                    await self._condition.wait()
+    async def take(self):
+        async with self._condition:
+            await self._condition.wait_for(lambda: self._token_num >= 1)
+            self._token_num -= 1
 
 
 class Fetcher(AbstractFetcher):
-    def __init__(self, **settings):
+    def __init__(self, settings: Settings):
         super().__init__()
         self.session: aiohttp.ClientSession = None
         self._token_bucket: TokenBucket = None
 
-        self.qps = settings.get('qps', 100)
-        self.max_qps = settings.get('max_qpa', 200)
+        self.settings = settings
+        self.qps = settings.fetcher.get('qps')
+        self.max_qps = settings.fetcher.get('max_qps')
+        assert 0 < self.qps <= self.max_qps
 
     def open(self):
         self.session = aiohttp.ClientSession(loop=self._loop)
@@ -117,34 +117,16 @@ class Fetcher(AbstractFetcher):
         self._token_bucket.stop()
         self._token_bucket = None
 
-    async def fetch(self, *requests) -> [Response, ]:
-        try:
-            requests[0]
-        except IndexError:
-            raise RuntimeError('fetch(*requests) got no requests')
-        responses = await self._handle_requests(requests)
-        try:
-            responses[1]
-        except IndexError:
-            return responses[0]
-        else:
-            return responses
-
-    async def _handle_requests(self, requests) -> [Response, ]:
-        requests = [await self.process_request(req) for req in requests]
-        responses = [None] * len(requests)
-
-        async def _request(index, request):
-            responses[index] = await self._request(request)
-
-        await asyncio.wait([_request(i, req) for i, req in enumerate(requests)])
-        return responses
+    async def fetch(self, method, url, **kwargs) -> Response:
+        req = Request(method, url, **kwargs)
+        req = await self.process_request(req)
+        await self._token_bucket.take()
+        return await self._request(req)
 
     async def process_request(self, request: Request) -> Request:
         return request
 
     async def _request(self, request: Request) -> Response:
-        await self._token_bucket.acquire()
         kwargs = request.as_dict()
         async with self.session.request(**kwargs) as resp:
-            return await Response.from_ClientResponse(resp)
+            return await Response.fromClientResponse(resp)

@@ -1,10 +1,11 @@
 from threading import Thread
 from functools import wraps
 from collections import AsyncGenerator
+from copy import copy
 import asyncio
 
 __all__ = ['run_in_loop', 'cancel_all_tasks', 'Action', 'isactionmethod', 'actionmethod',
-           'AbstractFetcher', 'AbstractSaver', 'AbstractSpider']
+           'AbstractFetcher', 'AbstractSaver', 'AbstractSpider', 'Storage']
 
 
 def run_in_loop(main_loop, coro, sub_loop) -> asyncio.Future:
@@ -87,7 +88,7 @@ def actionmethod(func):
 
 
 class AbstractFetcher(AioThreadActor):
-    async def fetch(self, *requests):
+    async def fetch(self, method, url, **kwargs):
         raise NotImplementedError
 
 
@@ -97,10 +98,10 @@ class AbstractSaver(AioThreadActor):
 
 
 class AbstractSpider(AioThreadActor):
-    async def fetch(self, *requests):
+    async def fetch(self, method, url, **kwargs):
         raise NotImplementedError
 
-    async def save(self, item):
+    async def save(self, item, wait_for_result=False):
         raise NotImplementedError
 
     async def add_action(self, action: Action):
@@ -110,3 +111,70 @@ class AbstractSpider(AioThreadActor):
     async def start_action(self):
         yield
         raise NotImplementedError
+
+
+class Storage:
+    __slots__ = ()
+
+    def _get(self, key):
+        return getattr(self, key)
+
+    def _set(self, key, value):
+        setattr(self, key, value)
+
+    def __getitem__(self, key):
+        try:
+            return self._get(key)
+        except AttributeError:
+            raise KeyError('{} has no key {}.'.format(self, repr(key)))
+
+    def __setitem__(self, key, value):
+        try:
+            self._set(key, value)
+        except AttributeError:
+            raise KeyError('{} has no key {}.'.format(self, repr(key)))
+
+    def __init__(self):
+        for k in self.__slots__:
+            self._set(k, None)
+
+    def __iter__(self):
+        return self.values()
+
+    def __str__(self):
+        return str(self.as_dict())
+
+    def __bool__(self):
+        for v in self.values():
+            if v:
+                return True
+        else:
+            return False
+
+    def get(self, key, default=None):
+        try:
+            return self._get(key)
+        except AttributeError:
+            return default
+
+    def copy(self):
+        return copy(self)
+
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            self._set(k, v)
+
+    def keys(self):
+        return (k for k in self.__slots__)
+
+    def values(self):
+        return (self._get(k) for k in self.__slots__)
+
+    def items(self):
+        return (item for item in zip(self.keys(), self.values()))
+
+    def as_list(self):
+        return list(self.values())
+
+    def as_dict(self):
+        return dict(self.items())

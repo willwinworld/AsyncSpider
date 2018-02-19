@@ -1,4 +1,4 @@
-from ._utils import Storage
+from ._base import Storage
 
 
 class Field(dict):

@@ -1,14 +1,16 @@
 from ._base import AbstractSaver
 from ._item import Item
+from ._settings import Settings
 import asyncio
 
 __all__ = ['Saver']
 
 
 class Saver(AbstractSaver):
-    def __init__(self, **settings):
+    def __init__(self, settings: Settings):
         super().__init__()
-        self.run_until_complete = settings.get('run_until_complete', True)
+        self.settings = settings
+        self.run_until_complete = settings.saver.get('run_until_complete')
 
     def _run(self):
         self.open()
