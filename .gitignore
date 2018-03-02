@@ -1,5 +1,6 @@
 .idea
 AsyncSpider/__pycache__
+*.pyc
 
 AsyncSpider.egg-info
 build

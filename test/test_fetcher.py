@@ -1,58 +1,51 @@
-from AsyncSpider import Fetcher, Request
-import requests
+from AsyncSpider import Controller
+from AsyncSpider.exceptions import TimeoutError
+from asyncio import wrap_future
 import time
 import asyncio
+import logging
 
 
 def count_time(func, *args, **kwargs):
     t0 = time.time()
     r = func(*args, **kwargs)
     t1 = time.time()
-    return t1 - t0, r
+    return round(t1 - t0, 4), r
 
 
-def requests_test(url, num):
-    s = requests.session()
-    for i in range(1, num + 1):
-        resp = s.get(url)
-        print(f"index: {i}\tstatus: {resp.status_code}\ttext: {resp.text[:50].strip()}")
-
-
-def fetcher_test(url, num):
-    f = Fetcher(dict(qps=20, max_qps=20))
+def fetcher_test(ctrl: Controller, url, num):
+    f = ctrl.fetcher
     loop = asyncio.get_event_loop()
     f.start()
 
-    async def func(i, future):
-        resp = await future
-        print(f"index: {i}\tstatus: {resp.status}\ttext: {resp.text[:50].strip()}")
+    async def func(i):
+        logger.info(f"count: {i:<5}\trequesting")
+        try:
+            resp = await wrap_future(f.run_coro_threadsafe(f.fetch('get', url, timeout=20)), loop=loop)
+        except TimeoutError:
+            logger.error(f"count: {i:<5}\ttimeout")
+        except Exception as exc:
+            logger.error(f"count: {i:<5}\t{exc!r}")
+        else:
+            logger.info(f"count: {i:<5}\tstatus: {resp.status:<5}\ttext: {resp.text()[:50].strip()}")
 
-    loop.run_until_complete(asyncio.wait([func(i, f.run_coro(f.fetch(Request('get', url)))) for i in range(num)]))
-
-    f.stop()
-    f.join()
-
-
-def fetcher_test2(url, num):
-    f = Fetcher(dict(qps=50, max_qps=50))
-    loop = asyncio.get_event_loop()
-    f.start()
-    responses = loop.run_until_complete(f.run_coro(
-        f.fetch(*[Request('get', url) for _ in range(num)])))
-    for i, resp in enumerate(responses):
-        print(f"index: {i}\tstatus: {resp.status}\ttext: {resp.text[:50].strip()}")
-    f.stop()
-    f.join()
+    try:
+        loop.run_until_complete(asyncio.wait([func(i) for i in range(num)]))
+    finally:
+        f.stop()
+        f.join()
+        pass
 
 
 if __name__ == '__main__':
+    ctrl = Controller('test')
+    logger = ctrl.logger
+    logger.setLevel(logging.INFO)
     target = "https://www.hao123.com/"
-    n = 100
-    print('test start')
-    # for func in (requests_test, fetcher_test, fetcher_test2):
-    # for func in (fetcher_test, fetcher_test2):
-    for func in (fetcher_test,):
-        t, r = count_time(func, target, n)
-        print(f'{func.__name__}: {t}s')
+    n = 10
+    logger.info('test start')
 
-    print('test end')
+    t, r = count_time(fetcher_test, ctrl, target, n)
+
+    logger.info(f'test:{n} requests in {t}s')
+    logger.info('test end')

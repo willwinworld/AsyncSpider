@@ -1,4 +1,7 @@
-from AsyncSpider import *
+import AsyncSpider
+from AsyncSpider import Item, Field, ItemProcessor, Spider
+from random import random
+import logging
 
 
 class TestItem(Item):
@@ -7,33 +10,38 @@ class TestItem(Item):
     summary = Field(default='')
 
 
-class PrintSaver(Saver):
-    async def save(self, item):
-        print(f'PrintSaver: save {item}')
+class LogProcessor(ItemProcessor):
+    async def process(self, item: TestItem):
+        await AsyncSpider.sleep(random() * 4)
+        self.saver.logger.info(str(item))
 
 
 class TestSpider(Spider):
     async def get(self, url, **kwargs):
-        return await self.fetch(Request('get', url, **kwargs))
+        return await self.fetch('get', url, **kwargs)
 
-    @actionmethod
     async def start_action(self):
-        print('start_action start')
-        for n in range(1, 10 + 1):
+        self.logger.info('start_action start')
+        for n in range(1, 15 + 1):
             yield self.parse(n)
-        print('start_action end')
+        self.logger.info('start_action end')
 
-    @actionmethod
     async def parse(self, n):
-        print(f'parse {n} start')
+        self.logger.info(f'parse {n} start')
         resp = await self.get("https://www.hao123.com/")
-        yield TestItem(number=n, summary=resp.text[:50].strip())
-        print(f'parse {n} end')
+        yield TestItem(number=n, summary=resp.text()[:50].strip())
+        self.logger.info(f'parse {n} end')
 
 
 if __name__ == '__main__':
-    spd = TestSpider({'Saver': {'class': PrintSaver}})
-    spd.start()
-    print('spd start')
-    spd.join()
-    print('spd end')
+    ctrl = AsyncSpider.Controller('test')
+    ctrl.set_settings({
+        'concurrency': 4
+    })
+    ctrl.construct(LogProcessor, TestSpider)
+
+    # ctrl.logger.setLevel(logging.WARNING)
+
+    ctrl.logger.info('Spd start')
+    ctrl.run_all()
+    ctrl.logger.info('Spd end')
