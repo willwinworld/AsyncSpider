@@ -6,7 +6,7 @@ import aiohttp
 __all__ = ['Fetcher', 'Saver']
 
 
-def active_all(sp):
+def activate_all(sp):
     for p in sp.processors:
         sp.call_on_start(p.on_start)
         sp.call_on_stop(p.on_stop)
@@ -35,7 +35,7 @@ class Fetcher(AioThreadExecutor, SuperProcessorMixin, ControllerShortcutMixin):
 
         self.call_on_start(set_session)
         self.call_on_stop(close_session)
-        self.call_on_start(active_all, self)
+        self.call_on_start(activate_all, self)
 
     async def fetch(self, method, url, **kwargs):
         req = Request(method, url, **kwargs)
@@ -63,7 +63,7 @@ class Saver(AioThreadExecutor, SuperProcessorMixin, ControllerShortcutMixin):
         ControllerShortcutMixin.__init__(self, controller)
         SuperProcessorMixin.__init__(self)
         AioThreadExecutor.__init__(self)
-        self.call_on_start(active_all, self)
+        self.call_on_start(activate_all, self)
 
     async def save(self, item):
         for p in self._processors:

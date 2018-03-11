@@ -70,19 +70,23 @@ class Controller(CallbackMixin):
         else:
             return True
 
-    def run_all(self):
+    def start_all(self):
         self._exec_start_callbacks()
         self.fetcher.start()
         self.saver.start()
         for spd in self._spiders:
             spd.start()
 
+    def wait_all(self):
         self._wait_for(self.are_all_spiders_closed)
         self.fetcher.stop()
         self.saver.stop()
-
         self._wait_for(lambda: self.fetcher.is_closed and self.saver.is_closed)
         self._exec_stop_callbacks()
+
+    def run_all(self):
+        self.start_all()
+        self.wait_all()
 
     def stop_all(self):
         def gen_ate():
@@ -93,11 +97,6 @@ class Controller(CallbackMixin):
         for ate in gen_ate():
             if not ate.is_stopped:
                 ate.stop()
-
-    def wait_all(self):
-        self._wait_for(self.are_all_spiders_closed)
-        self._wait_for(lambda: self.fetcher.is_closed and self.saver.is_closed)
-        self._exec_stop_callbacks()
 
     @property
     def name(self) -> str:
