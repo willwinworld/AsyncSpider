@@ -1,7 +1,8 @@
 from AsyncSpider import Field
-import AsyncSpider
-import time
 from random import random
+import time
+import AsyncSpider
+import asyncio
 
 
 class TestItem(AsyncSpider.Item):
@@ -9,17 +10,16 @@ class TestItem(AsyncSpider.Item):
     content = Field()
 
 
-class LogProcessor(AsyncSpider.ItemProcessor):
+class LogIP(AsyncSpider.ItemProcessor):
     async def process(self, item: TestItem):
-        await AsyncSpider.sleep(random() * 4)
+        await asyncio.sleep(random() * 4)
         self.saver.logger.info(str(item))
 
 
 if __name__ == '__main__':
-    ctrl = AsyncSpider.Controller('test')
-    print(ctrl.logger)
-    sav = ctrl.saver
-    sav.add_processor(LogProcessor(sav))
+    sav = AsyncSpider.Saver()
+
+    sav.add_processor(LogIP())
     sav.start()
     for x in 'abcdefg':
         for j in '123':

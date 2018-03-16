@@ -1,7 +1,8 @@
 import AsyncSpider
-from AsyncSpider import Item, Field, ItemProcessor, Spider
+from AsyncSpider import Item, Field, Spider, Fetcher, Saver
+from AsyncSpider.implements import TokenBucketRP
 from random import random
-import logging
+import asyncio
 
 
 class TestItem(Item):
@@ -10,9 +11,9 @@ class TestItem(Item):
     summary = Field(default='')
 
 
-class LogProcessor(ItemProcessor):
+class LogIP(AsyncSpider.ItemProcessor):
     async def process(self, item: TestItem):
-        await AsyncSpider.sleep(random() * 4)
+        await asyncio.sleep(random() * 4)
         self.saver.logger.info(str(item))
 
 
@@ -34,14 +35,20 @@ class TestSpider(Spider):
 
 
 if __name__ == '__main__':
-    ctrl = AsyncSpider.Controller('test')
-    ctrl.set_settings({
-        'concurrency': 4
-    })
-    ctrl.construct(LogProcessor, TestSpider)
+    spd = TestSpider(concurrency=4)
 
-    # ctrl.logger.setLevel(logging.WARNING)
+    spd.set_fetcher(Fetcher())
+    spd.fetcher.add_processor(TokenBucketRP(qps=3, max_qps=3))
 
-    ctrl.logger.info('Spd start')
-    ctrl.run_all()
-    ctrl.logger.info('Spd end')
+    spd.set_saver(Saver())
+    spd.saver.add_processor(LogIP())
+
+    AsyncSpider.logger.info('Spd start')
+    AsyncSpider.run_all(spd)
+    # spd.fetcher.start()
+    # spd.saver.start()
+    # spd.start()
+    # spd.join()
+    # spd.fetcher.stop()
+    # spd.saver.stop()
+    AsyncSpider.logger.info('Spd end')

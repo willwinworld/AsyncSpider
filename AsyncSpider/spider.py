@@ -1,38 +1,36 @@
-from .base import AioThreadExecutor, ControllerShortcutMixin
+from .base import AioThreadExecutor
 from .item import Item
-from .fetsav import Fetcher, Saver
+from .fetsav import FetcherRefMixin, SaverRefMixin
 from .reqrep import Response
+from .data import FrozenDict
 from asyncio import Queue as AsyncQueue
 from asyncio import wrap_future
 from collections import AsyncGenerator
+from threading import Lock
 
 __all__ = ['Spider']
 
 
-class Spider(AioThreadExecutor, ControllerShortcutMixin):
-    def __init__(self, controller):
-        ControllerShortcutMixin.__init__(self, controller)
+class Spider(AioThreadExecutor, FetcherRefMixin, SaverRefMixin):
+    def __init__(self, concurrency=10, stop_when_empty=True, **settings):
         AioThreadExecutor.__init__(self)
+        FetcherRefMixin.__init__(self)
+        SaverRefMixin.__init__(self)
 
-        self.concurrency = self.settings['concurrency']
-        assert self.concurrency >= 1
+        self.runtime_data = dict(fetch_count=0, item_count=0)
+        self.mutex = Lock()
 
-        self.stop_when_empty = self.settings.get('stop_when_empty', True)
+        assert concurrency >= 1
+        self.settings = FrozenDict(concurrency=concurrency, stop_when_empty=stop_when_empty, **settings)
 
-        self._action_queue = AsyncQueue(loop=self._loop)
+        self._action_queue = AsyncQueue(loop=self.loop)
         self._working_num = 0
 
+        self.call_on_start(self._check_fetcher)
+        self.call_on_start(self._check_saver)
         self.call_on_start(self._action_queue.put_nowait, self.start_action())
-        for _ in range(self.concurrency):
+        for _ in range(concurrency):
             self.call_on_start(self.run_coro, self._worker())
-
-    @property
-    def fetcher(self) -> Fetcher:
-        return self._controller.fetcher
-
-    @property
-    def saver(self) -> Saver:
-        return self._controller.saver
 
     async def add_action(self, action):
         assert isinstance(action, AsyncGenerator)
@@ -41,13 +39,18 @@ class Spider(AioThreadExecutor, ControllerShortcutMixin):
     async def fetch(self, method, url, **kwargs) -> Response:
         fut = self.fetcher.run_coro_threadsafe(self.fetcher.fetch(method, url, **kwargs))
         fut = wrap_future(fut, loop=self._loop)
-        return await fut
+        resp = await fut
+        with self.mutex:
+            self.runtime_data['fetch_count'] += 1
+        return resp
 
     async def save(self, item, wait=False):
         fut = self.saver.run_coro_threadsafe(self.saver.save(item))
         if wait:
             fut = wrap_future(fut, loop=self._loop)
             await fut
+        with self.mutex:
+            self.runtime_data['item_count'] += 1
 
     async def _worker(self):
         while True:
@@ -61,7 +64,7 @@ class Spider(AioThreadExecutor, ControllerShortcutMixin):
             finally:
                 self._working_num -= 1
                 self._action_queue.task_done()
-                if self.stop_when_empty and self._working_num == 0 and self._action_queue.empty():
+                if self.settings['stop_when_empty'] and self._action_queue.empty() and self._working_num == 0:
                     self._loop.stop()
 
     async def _drive(self, action):

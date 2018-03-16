@@ -1,4 +1,5 @@
-from ..core import RequestProcessor, Request
+from ..processor import RequestProcessor
+from ..reqrep import Request
 from fake_useragent import UserAgent
 import asyncio
 
@@ -6,14 +7,14 @@ __all__ = ['TokenBucketRP', 'RandomUserAgentRP']
 
 
 class TokenBucketRP(RequestProcessor):
-    def __init__(self, fetcher):
-        super().__init__(fetcher)
+    def __init__(self, qps, max_qps):
+        super().__init__()
 
-        self._qps = self.fetcher.settings['qps']
-        self._max_qps = self.fetcher.settings['max_qps']
-        self._token_num = self._max_qps
+        self._qps = qps
+        self._max_qps = max_qps
+        self._token_num = max_qps
 
-        self._cond = asyncio.Condition(loop=fetcher.loop)
+        self._cond = None
 
     async def _add_token(self):
         while True:
@@ -32,6 +33,7 @@ class TokenBucketRP(RequestProcessor):
             self._token_num -= 1
 
     def on_start(self):
+        self._cond = asyncio.Condition(loop=self.fetcher.loop)
         self.fetcher.run_coro(self._add_token())
 
     async def process(self, request):
@@ -42,6 +44,5 @@ class RandomUserAgentRP(RequestProcessor):
     ua = UserAgent()
 
     async def process(self, request: Request):
-        h = request.get('headers', {})
-        h['User-Agent'] = self.ua.random
-        request['headers'] = h
+        request.setdefault('headers', {})
+        request['headers']['User-Agent'] = self.ua.random

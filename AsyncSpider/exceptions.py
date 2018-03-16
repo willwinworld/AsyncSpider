@@ -1,9 +1,10 @@
-from concurrent.futures import TimeoutError
+import concurrent.futures
 
 __all__ = ['BaseSpiderException',
+           'TimeoutError',
 
            'FetcherException',
-           'RequestFailError', 'DropRequest', 'TimeoutError',
+           'RequestFailError', 'DropRequest',
 
            'SaverException',
            'ItemFailError', 'DropItem',
@@ -14,6 +15,10 @@ __all__ = ['BaseSpiderException',
 
 
 class BaseSpiderException(Exception):
+    pass
+
+
+class TimeoutError(concurrent.futures.TimeoutError, BaseSpiderException):
     pass
 
 

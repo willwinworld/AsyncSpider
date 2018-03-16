@@ -1,9 +1,7 @@
 import logging.config
 import sys
 
-__all__ = ['logger']
-
-logger = logging.getLogger('AsyncSpider')
+__all__ = ['default_logger', 'logger']
 
 logging.config.dictConfig(dict(
     version=1,
@@ -28,3 +26,6 @@ logging.config.dictConfig(dict(
         }
     }
 ))
+
+default_logger = logging.getLogger('AsyncSpider')
+logger = default_logger

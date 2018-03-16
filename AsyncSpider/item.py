@@ -28,7 +28,6 @@ class ItemMeta(DefinedKeysDictMeta):
 
 
 class Item(DefinedKeysDict, metaclass=ItemMeta):
-    # keys' order is lost due to function in ItemMeta which collects fields by dict
     """ Usage:
     class MyItem(Item):
         name=Field(default='')
@@ -51,4 +50,4 @@ class Item(DefinedKeysDict, metaclass=ItemMeta):
         super().__init__(**kwargs)
 
     def __str__(self):
-        return ''.join(('<', self.__class__.__name__, ' ', super().__repr__(), '>'))
+        return ''.join(('<', self.__class__.__name__, ' ', super().__str__(), '>'))

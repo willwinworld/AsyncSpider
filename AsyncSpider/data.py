@@ -25,10 +25,7 @@ class DefinedKeysDict(MutableMapping, metaclass=DefinedKeysDictMeta):
 
     def __init__(self, **kwargs):
         self._values = [self.__marker] * self._key_num
-        for key, value in kwargs.items():
-            if key not in self._keys:
-                raise KeyError(key)
-            self._values[self._key2index[key]] = value
+        self.update(**kwargs)
 
     def __getitem__(self, key):
         if key not in self._keys:

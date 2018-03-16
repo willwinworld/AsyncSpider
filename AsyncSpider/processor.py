@@ -1,7 +1,6 @@
-from .fetsav import Fetcher, Saver
+from .fetsav import FetcherRefMixin, SaverRefMixin
 from .reqrep import Request
 from .item import Item
-import weakref
 
 __all__ = ['RequestProcessor', 'ItemProcessor']
 
@@ -17,27 +16,19 @@ class BaseProcessor:
         pass
 
 
-class RequestProcessor(BaseProcessor):
-    def __init__(self, fetcher):
+class RequestProcessor(BaseProcessor, FetcherRefMixin):
+    def __init__(self):
         BaseProcessor.__init__(self)
-        self._fetcher = weakref.proxy(fetcher)
-
-    @property
-    def fetcher(self) -> Fetcher:
-        return self._fetcher
+        FetcherRefMixin.__init__(self)
 
     async def process(self, request: Request):
         pass
 
 
-class ItemProcessor(BaseProcessor):
-    def __init__(self, saver):
+class ItemProcessor(BaseProcessor, SaverRefMixin):
+    def __init__(self):
         BaseProcessor.__init__(self)
-        self._saver = weakref.proxy(saver)
-
-    @property
-    def saver(self) -> Saver:
-        return self._saver
+        SaverRefMixin.__init__(self)
 
     async def process(self, item: Item):
         pass
